@@ -30,9 +30,27 @@ export class PeerAgent {
     };
     
     const prompt = `
-      You are an industry analysis expert. Based on the following company context, identify 3-5 direct publicly traded competitors. 
-      Provide Yahoo Finance-compatible ticker symbols (do not leave empty for public companies).
-      
+      You are an industry analysis expert specializing in competitive landscapes.
+
+      Step 1 — Identify the company:
+      From the context below, determine:
+      - Company name (e.g. Xiaomi, Apple, Samsung)
+      - Primary industry/sector (e.g. Consumer Electronics, Semiconductors, E-commerce)
+      - Primary geographic market (e.g. China, US, Global)
+
+      Step 2 — Select 3-5 DIRECT competitors:
+      Competitors must operate in the SAME industry/sector and compete for the SAME customers.
+      Prioritize companies with similar products, revenue scale, and geographic reach.
+
+      Sector-specific guidance:
+      - Chinese Consumer Electronics (Xiaomi, OPPO, Vivo): peers = Samsung (005930.KS), Apple (AAPL), Xiaomi (1810.HK), Huawei (private — skip), Lenovo (0992.HK), BBK/OPPO/Vivo (private — skip if no public ticker), BYD (002594.SZ for EV overlap)
+      - US Big Tech: peers = other FAANG/Mag7 companies in the same product category
+      - Chinese EV: peers = BYD, NIO, Li Auto, XPeng, Tesla
+      - Do NOT select companies purely based on market cap or country if they are in different sectors.
+      - Do NOT select telecom carriers as peers for device/hardware manufacturers.
+
+      Provide Yahoo Finance-compatible ticker symbols. Skip private companies with no public ticker.
+
       Company Context:
       ${contextPayload.substring(0, 10000)}
     `;

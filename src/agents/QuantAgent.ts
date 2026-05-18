@@ -68,8 +68,29 @@ export class QuantAgent {
         }
       }
     };
-    
+
     const requiredFields = ["company", "summary", "sentiment", "metrics"];
+
+    // Always extract detailed valuation metrics for the KPI grid
+    requestedSections += `
+      In the 'metrics' array, include ALL of the following as separate entries (use "N/A" if unavailable):
+      - Revenue (most recent annual or TTM)
+      - Revenue Growth YoY (%)
+      - Net Income / Earnings
+      - EPS (Earnings Per Share, trailing)
+      - Trailing P/E Ratio
+      - Forward P/E Ratio
+      - Price-to-Book (P/B) Ratio
+      - PEG Ratio
+      - EV/EBITDA
+      - EBITDA Margin (%)
+      - Return on Equity (ROE %)
+      - Debt-to-Equity Ratio
+      - Free Cash Flow
+      - Dividend Yield (%)
+      - Market Cap
+      Use 'up' trend for positive values vs sector average, 'down' for concerning values, 'flat' for neutral.
+    `;
     
     // Add optional requests if the caller asks for it directly from quant
     if (options.includes("highlights")) {

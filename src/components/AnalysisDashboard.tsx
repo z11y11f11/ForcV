@@ -38,7 +38,7 @@ export default function AnalysisDashboard({ data, onReset, onError }: DashboardP
   const [sections, setSections] = useState({
     metrics: true,
     history: true,
-    valuation: false,
+    valuation: true,
     summary: true,
     insights: true,
     esg: true,

@@ -70,14 +70,23 @@ export function ValuationModels({ summary, stock, loading }: ValuationModelsProp
             ) : summary ? (
               <>
                 <div className="bg-white/5 border border-white/10 rounded-xl p-3 hover:bg-white/10 transition-colors">
-                  <div className="text-[10px] text-slate-400 mb-1 uppercase tracking-wider font-semibold">PE/PB/PEG</div>
-                  <div className="text-sm font-medium">PE: {summary.trailingPE?.toFixed(1) || 'N/A'}</div>
-                  <div className="text-sm font-medium">PB: {summary.priceToBook?.toFixed(1) || 'N/A'}</div>
-                  <div className="text-sm font-medium">PEG: {summary.pegRatio?.toFixed(1) || 'N/A'}</div>
+                  <div className="text-[10px] text-slate-400 mb-1 uppercase tracking-wider font-semibold">P/E Ratios</div>
+                  <div className="text-xs font-medium text-slate-300">Trailing: <span className="text-white font-bold">{summary.trailingPE?.toFixed(1) || 'N/A'}</span></div>
+                  <div className="text-xs font-medium text-slate-300 mt-0.5">Forward: <span className="text-white font-bold">{summary.forwardPE?.toFixed(1) || 'N/A'}</span></div>
+                </div>
+                <div className="bg-white/5 border border-white/10 rounded-xl p-3 hover:bg-white/10 transition-colors">
+                  <div className="text-[10px] text-slate-400 mb-1 uppercase tracking-wider font-semibold">P/B &amp; PEG</div>
+                  <div className="text-xs font-medium text-slate-300">P/B: <span className="text-white font-bold">{summary.priceToBook?.toFixed(2) || 'N/A'}</span></div>
+                  <div className="text-xs font-medium text-slate-300 mt-0.5">PEG: <span className="text-white font-bold">{summary.pegRatio?.toFixed(2) || 'N/A'}</span></div>
                 </div>
                 <div className="bg-white/5 border border-white/10 rounded-xl p-3 hover:bg-white/10 transition-colors">
                   <div className="text-[10px] text-slate-400 mb-1 uppercase tracking-wider font-semibold">EV/EBITDA</div>
-                  <div className="text-2xl font-bold mt-2">{summary.enterpriseToEbitda?.toFixed(2) || 'N/A'}</div>
+                  <div className="text-xl font-bold mt-1">{summary.enterpriseToEbitda?.toFixed(2) || 'N/A'}</div>
+                </div>
+                <div className="bg-white/5 border border-white/10 rounded-xl p-3 hover:bg-white/10 transition-colors">
+                  <div className="text-[10px] text-slate-400 mb-1 uppercase tracking-wider font-semibold">ROE &amp; Growth</div>
+                  <div className="text-xs font-medium text-slate-300">ROE: <span className="text-white font-bold">{summary.returnOnEquity ? (summary.returnOnEquity * 100).toFixed(1) + '%' : 'N/A'}</span></div>
+                  <div className="text-xs font-medium text-slate-300 mt-0.5">Rev Gr: <span className="text-white font-bold">{summary.revenueGrowth ? (summary.revenueGrowth * 100).toFixed(1) + '%' : 'N/A'}</span></div>
                 </div>
                 <div className="col-span-2 bg-white/5 border border-white/10 rounded-xl p-3 hover:bg-white/10 transition-colors">
                   <div className="text-[10px] text-slate-400 mb-1 uppercase tracking-wider font-semibold">Dividend Model</div>
@@ -89,6 +98,10 @@ export function ValuationModels({ summary, stock, loading }: ValuationModelsProp
                     <div>
                       <span className="text-xs text-slate-400">Payout: </span>
                       <span className="text-slate-200">{(summary.payoutRatio ? (summary.payoutRatio * 100).toFixed(2) : '0.00')}%</span>
+                    </div>
+                    <div>
+                      <span className="text-xs text-slate-400">EBITDA Margin: </span>
+                      <span className="text-slate-200">{summary.ebitdaMargins ? (summary.ebitdaMargins * 100).toFixed(1) + '%' : 'N/A'}</span>
                     </div>
                   </div>
                 </div>
@@ -112,22 +125,31 @@ export function ValuationModels({ summary, stock, loading }: ValuationModelsProp
             </div>
           ) : (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block mb-1">Growth Rate (%)</label>
-                  <input 
-                    type="number" 
-                    value={growthRate} 
+                  <input
+                    type="number"
+                    value={growthRate}
                     onChange={(e) => setGrowthRate(parseFloat(e.target.value) || 0)}
                     className="w-full px-3 py-2 bg-[#0a0d14] border border-slate-700 rounded-lg text-sm text-white focus:ring-1 focus:border-indigo-500 focus:ring-indigo-500 transition-all outline-none"
                   />
                 </div>
                 <div>
                   <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block mb-1">Discount Rate (%)</label>
-                  <input 
-                    type="number" 
-                    value={discountRate} 
+                  <input
+                    type="number"
+                    value={discountRate}
                     onChange={(e) => setDiscountRate(parseFloat(e.target.value) || 0)}
+                    className="w-full px-3 py-2 bg-[#0a0d14] border border-slate-700 rounded-lg text-sm text-white focus:ring-1 focus:border-indigo-500 focus:ring-indigo-500 transition-all outline-none"
+                  />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block mb-1">Terminal Growth Rate (%)</label>
+                  <input
+                    type="number"
+                    value={terminalGrowthRate}
+                    onChange={(e) => setTerminalGrowthRate(parseFloat(e.target.value) || 0)}
                     className="w-full px-3 py-2 bg-[#0a0d14] border border-slate-700 rounded-lg text-sm text-white focus:ring-1 focus:border-indigo-500 focus:ring-indigo-500 transition-all outline-none"
                   />
                 </div>

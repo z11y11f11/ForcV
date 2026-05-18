@@ -56,8 +56,14 @@ export default function App() {
             <form onSubmit={async (e) => {
               e.preventDefault();
               const formData = new FormData(e.currentTarget);
-              const ticker = formData.get('ticker') as string;
+              const ticker = (formData.get('ticker') as string).trim();
               if (ticker) {
+                // Reject natural language input — ticker symbols don't contain spaces
+                // and are typically short alphanumeric strings (e.g. AAPL, 1810.HK, BRK.B)
+                if (/\s/.test(ticker) || ticker.length > 20) {
+                  setError('This field is for ticker symbols only (e.g. AAPL, 1810.HK). Use the "Orchestrator Request" chatbox below for natural language queries.');
+                  return;
+                }
                 setError(null);
                 setIsAnalyzing(true);
                 setAnalysis(null);
