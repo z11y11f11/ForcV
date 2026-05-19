@@ -1,16 +1,36 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { Search, Zap, Bot } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { runMasterAnalysis } from '../services/ai';
+import { runMasterAnalysis, AgentEvent } from '../services/ai';
 import AnalysisDashboard from './AnalysisDashboard';
 import { AnalysisResult } from '../types';
 
+function mergePartial(acc: Partial<AnalysisResult>, incoming: Partial<AnalysisResult>): Partial<AnalysisResult> {
+  const merged = { ...acc, ...incoming };
+  if (acc.metrics && incoming.metrics) {
+    const seen = new Set(acc.metrics.map(m => m.label));
+    merged.metrics = [...acc.metrics, ...incoming.metrics.filter(m => !seen.has(m.label))];
+  }
+  if (acc.highlights && incoming.highlights) merged.highlights = [...acc.highlights, ...incoming.highlights];
+  if (acc.risks && incoming.risks) merged.risks = [...acc.risks, ...incoming.risks];
+  return merged;
+}
+
 export default function ModeA() {
   const [ticker, setTicker] = useState('');
-  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [partialData, setPartialData] = useState<Partial<AnalysisResult>>({});
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [agentStatus, setAgentStatus] = useState<{ agent: string; status: string } | null>(null);
+  const [agentStatus, setAgentStatus] = useState<AgentEvent | null>(null);
+
+  const showDashboard = !!partialData.company;
+
+  const handleEvent = useCallback((evt: AgentEvent) => {
+    setAgentStatus(evt);
+    if (evt.partial) {
+      setPartialData(prev => mergePartial(prev, evt.partial!));
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -21,28 +41,32 @@ export default function ModeA() {
       return;
     }
     setError(null);
-    setLoading(true);
-    setAnalysis(null);
+    setIsAnalyzing(true);
+    setPartialData({});
+
     try {
-      const result = await runMasterAnalysis(
+      // runMasterAnalysis streams partials via handleEvent — we also use the
+      // final return value as a safety net to fill anything that was missed.
+      const final = await runMasterAnalysis(
         { ticker: t, options: ['highlights', 'risks', 'competitors'] },
-        (evt) => setAgentStatus(evt)
+        handleEvent
       );
-      setAnalysis(result);
+      setPartialData(final);
     } catch (err: any) {
-      setError(err.message || 'Analysis failed. Please check the ticker symbol and try again.');
+      setError(err.message || 'Analysis failed. Please check the ticker and try again.');
     } finally {
-      setLoading(false);
+      setIsAnalyzing(false);
       setAgentStatus(null);
     }
   };
 
-  if (analysis) {
+  if (showDashboard) {
     return (
       <div className="flex-1 overflow-y-auto p-8">
         <AnalysisDashboard
-          data={analysis}
-          onReset={() => { setAnalysis(null); setTicker(''); }}
+          data={partialData}
+          isLoading={isAnalyzing}
+          onReset={() => { setPartialData({}); setTicker(''); setError(null); }}
           onError={(msg) => setError(msg)}
         />
       </div>
@@ -63,6 +87,7 @@ export default function ModeA() {
         <p className="text-slate-400 text-sm leading-relaxed">
           Enter a stock ticker. QuantAgent fetches live market data and full valuation models.
           PeerAgent identifies direct competitors. CIOAgent synthesises the final verdict.
+          <br /><span className="text-blue-400/70">All three run in parallel — results stream in as each agent finishes.</span>
         </p>
       </motion.div>
 
@@ -80,23 +105,23 @@ export default function ModeA() {
               value={ticker}
               onChange={e => setTicker(e.target.value)}
               placeholder="e.g. AAPL, 1810.HK, TSLA, BABA"
-              disabled={loading}
+              disabled={isAnalyzing}
               className="w-full pl-10 pr-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30 outline-none transition-all text-sm disabled:opacity-50"
             />
           </div>
           <button
             type="submit"
-            disabled={loading || !ticker.trim()}
-            className="px-6 py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold rounded-xl transition-all shadow-[0_0_15px_rgba(37,99,235,0.3)] hover:shadow-[0_0_25px_rgba(37,99,235,0.5)] text-sm"
+            disabled={isAnalyzing || !ticker.trim()}
+            className="px-6 py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold rounded-xl transition-all shadow-[0_0_15px_rgba(37,99,235,0.3)] text-sm"
           >
-            {loading ? 'Running…' : 'Analyze'}
+            {isAnalyzing ? 'Running…' : 'Analyze'}
           </button>
         </div>
         {error && <p className="mt-3 text-rose-400 text-sm">{error}</p>}
       </motion.form>
 
       <AnimatePresence>
-        {loading && agentStatus && (
+        {isAnalyzing && agentStatus && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -112,20 +137,17 @@ export default function ModeA() {
         )}
       </AnimatePresence>
 
-      {!loading && (
+      {!isAnalyzing && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.4 }}
           className="mt-16 flex items-center gap-2 text-[11px] text-slate-700"
         >
-          {['QuantAgent', '→', 'PeerAgent', '→', 'CIOAgent'].map((item, i) => (
-            <span
-              key={i}
-              className={item === '→'
-                ? 'text-slate-800'
-                : 'px-2.5 py-1 bg-slate-900/80 border border-slate-800 rounded-lg text-slate-500'}
-            >
+          {['QuantAgent', '∥', 'PeerAgent', '→', 'CIOAgent'].map((item, i) => (
+            <span key={i} className={item === '∥' || item === '→'
+              ? 'text-slate-700 font-bold'
+              : 'px-2.5 py-1 bg-slate-900/80 border border-slate-800 rounded-lg text-slate-500'}>
               {item}
             </span>
           ))}

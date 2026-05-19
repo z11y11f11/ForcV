@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Bot, User, Upload, CheckCircle2, Loader2, X, Zap } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { conductDialogueStep, DialogueStep } from '../agents/LLMProvider';
@@ -27,6 +27,17 @@ interface ConfirmedPlan {
 
 type Phase = 'chatting' | 'awaiting_confirm' | 'awaiting_pdf' | 'analyzing' | 'done';
 
+function mergePartial(acc: Partial<AnalysisResult>, incoming: Partial<AnalysisResult>): Partial<AnalysisResult> {
+  const merged = { ...acc, ...incoming };
+  if (acc.metrics && incoming.metrics) {
+    const seen = new Set(acc.metrics.map(m => m.label));
+    merged.metrics = [...acc.metrics, ...incoming.metrics.filter(m => !seen.has(m.label))];
+  }
+  if (acc.highlights && incoming.highlights) merged.highlights = [...acc.highlights, ...incoming.highlights];
+  if (acc.risks && incoming.risks) merged.risks = [...acc.risks, ...incoming.risks];
+  return merged;
+}
+
 export default function ModeC() {
   const [messages, setMessages] = useState<Message[]>([
     { role: 'assistant', content: INTRO }
@@ -35,7 +46,7 @@ export default function ModeC() {
   const [phase, setPhase] = useState<Phase>('chatting');
   const [plan, setPlan] = useState<ConfirmedPlan | null>(null);
   const [file, setFile] = useState<File | null>(null);
-  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  const [partialData, setPartialData] = useState<Partial<AnalysisResult>>({});
   const [thinking, setThinking] = useState(false);
   const [agentStatus, setAgentStatus] = useState<AgentEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -43,9 +54,19 @@ export default function ModeC() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Show dashboard as soon as the first company info arrives (even mid-analysis)
+  const showDashboard = !!partialData.company;
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, phase, thinking]);
+
+  const handleEvent = useCallback((evt: AgentEvent) => {
+    setAgentStatus(evt);
+    if (evt.partial) {
+      setPartialData(prev => mergePartial(prev, evt.partial!));
+    }
+  }, []);
 
   const sendMessage = async () => {
     const text = input.trim();
@@ -66,7 +87,6 @@ export default function ModeC() {
       if (step.type === 'question') {
         setMessages(prev => [...prev, { role: 'assistant', content: step.content }]);
       } else {
-        // LLM has enough info — show plan for confirmation
         const planMsg =
           `Based on our conversation, here's my analysis plan:\n\n` +
           `${step.planSummary}\n\n` +
@@ -120,6 +140,7 @@ export default function ModeC() {
   const runAgents = async (pdfFile?: File) => {
     if (!plan) return;
     setPhase('analyzing');
+    setPartialData({});
     setMessages(prev => [...prev, {
       role: 'assistant',
       content: `Starting analysis for ${plan.companyName} (${plan.ticker})…`
@@ -127,17 +148,18 @@ export default function ModeC() {
 
     try {
       const usedFile = pdfFile || file;
-      let result: AnalysisResult;
+      let final: AnalysisResult;
 
       if (usedFile) {
-        result = await runParallelAnalysis(plan.ticker, usedFile, plan.aspects, (evt) => setAgentStatus(evt));
+        final = await runParallelAnalysis(plan.ticker, usedFile, plan.aspects, handleEvent);
       } else {
-        result = await runMasterAnalysis(
+        final = await runMasterAnalysis(
           { ticker: plan.ticker, options: plan.aspects },
-          (evt) => setAgentStatus(evt)
+          handleEvent
         );
       }
-      setAnalysis(result);
+      // Safety net: merge final result in case any section was missed by streaming
+      setPartialData(prev => mergePartial(prev, final));
       setPhase('done');
     } catch (err: any) {
       setError(err.message || 'Analysis failed. Please try again.');
@@ -148,19 +170,25 @@ export default function ModeC() {
   };
 
   const handleReset = () => {
-    setAnalysis(null);
+    setPartialData({});
     setPhase('chatting');
     setMessages([{ role: 'assistant', content: INTRO }]);
     setPlan(null);
     setFile(null);
     setError(null);
+    setAgentStatus(null);
   };
 
-  // ── Done: show dashboard ──────────────────────────────────────────────────
-  if (phase === 'done' && analysis) {
+  // ── Dashboard: shown as soon as first company data arrives ────────────────
+  if (showDashboard) {
     return (
       <div className="flex-1 overflow-y-auto p-8">
-        <AnalysisDashboard data={analysis} onReset={handleReset} onError={(msg) => setError(msg)} />
+        <AnalysisDashboard
+          data={partialData}
+          isLoading={phase === 'analyzing'}
+          onReset={handleReset}
+          onError={(msg) => setError(msg)}
+        />
       </div>
     );
   }
@@ -184,7 +212,6 @@ export default function ModeC() {
             animate={{ opacity: 1, y: 0 }}
             className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
           >
-            {/* Avatar */}
             <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
               msg.role === 'assistant'
                 ? 'bg-indigo-500/20 border border-indigo-500/30'
@@ -195,7 +222,6 @@ export default function ModeC() {
                 : <User className="w-4 h-4 text-slate-300" />
               }
             </div>
-            {/* Bubble */}
             <div className={`max-w-[70%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
               msg.role === 'assistant'
                 ? 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-sm'

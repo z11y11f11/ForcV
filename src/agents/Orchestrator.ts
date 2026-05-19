@@ -5,7 +5,13 @@ import { PeerAgent } from "./PeerAgent";
 import { CIOAgent } from "./CIOAgent";
 import { OrchestratorToolCall, planOrchestratorToolCalls } from "./LLMProvider";
 
-export type AgentEvent = { agent: string; status: string };
+/** Carries both a status string and an optional partial result when an agent completes. */
+export type AgentEvent = {
+  agent: string;
+  status: string;
+  /** Set when an agent has just completed — contains the data it produced. */
+  partial?: Partial<AnalysisResult>;
+};
 
 export class OrchestratorAgent {
   /**
@@ -24,91 +30,38 @@ export class OrchestratorAgent {
       ? await this.planWithLLM(input, onEvent)
       : this.planFromCheckboxFallback(input);
 
+    // Split plan into two dependency groups:
+    //   Group 1 (independent) — can run in parallel
+    //   Group 2 (needs group 1 results) — must run after
+    const GROUP1: OrchestratorToolCall["name"][] = ["fetch_market_data", "analyze_document", "compare_peers"];
+    const group1 = toolPlan.filter(t => (GROUP1 as string[]).includes(t.name));
+    const group2 = toolPlan.filter(t => !(GROUP1 as string[]).includes(t.name));
+
     onEvent({
       agent: "Orchestrator",
-      status: `Tool plan: ${toolPlan.map((call) => call.name).join(" -> ") || "No tools selected"}`
+      status: `Parallel: [${group1.map(t => t.name).join(", ")}] → then: [${group2.map(t => t.name).join(", ") || "—"}]`
     });
 
-    for (const toolCall of toolPlan) {
-      switch (toolCall.name) {
-        case "fetch_market_data": {
-          const ticker = toolCall.arguments.ticker || input.ticker;
-          if (!ticker) {
-            onEvent({ agent: "QuantAgent", status: "Skipped: no ticker available" });
-            break;
-          }
-
-          onEvent({ agent: "Orchestrator", status: "Calling fetch_market_data -> QuantAgent" });
-          const quantRes = await QuantAgent.runAutonomousAnalysis(
-            ticker,
-            toolCall.arguments.options || input.options,
-            (s) => onEvent({ agent: "QuantAgent", status: s.replace('QuantAgent: ', '') })
-          );
-          result = { ...result, ...quantRes };
-          onEvent({ agent: "QuantAgent", status: this.describeAgentReturn(quantRes) });
-          break;
-        }
-
-        case "analyze_document": {
-          if (!input.file) {
-            onEvent({ agent: "FundamentalAgent", status: "Skipped: no document uploaded" });
-            break;
-          }
-
-          onEvent({ agent: "Orchestrator", status: "Calling analyze_document -> FundamentalAgent" });
-          const fundamentalRes = await FundamentalAgent.runAutonomousAnalysis(
-            input.file,
-            toolCall.arguments.options || input.options,
-            (s) => onEvent({ agent: "FundamentalAgent", status: s.replace('FundamentalAgent: ', '') })
-          );
-          result = { ...result, ...fundamentalRes };
-          onEvent({ agent: "FundamentalAgent", status: this.describeAgentReturn(fundamentalRes) });
-          break;
-        }
-
-        case "compare_peers": {
-          onEvent({ agent: "Orchestrator", status: "Calling compare_peers -> PeerAgent" });
-          const contextStr = toolCall.arguments.context || result.summary || result.company?.name || input.ticker || input.userRequest || "Financial Document";
-          const peers = await PeerAgent.identifyPeers(contextStr);
-          result.competitors = peers;
-          onEvent({ agent: "PeerAgent", status: `Returned ${peers.length} competitors` });
-          break;
-        }
-
-        case "synthesize_verdict": {
-          onEvent({ agent: "Orchestrator", status: "Calling synthesize_verdict -> CIOAgent" });
-          const verdict = await CIOAgent.crossAnalyze(result, result);
-          result.crossAnalysis = verdict;
-          onEvent({ agent: "CIOAgent", status: this.describeAgentReturn(verdict) });
-          break;
-        }
-
-        case "synthesize_knowledge": {
-          const topic = (toolCall.arguments.topic || "summary") as "esg" | "highlights" | "risks" | "summary";
-          const companyName = toolCall.arguments.companyName || result.company?.name || input.ticker || "Unknown Company";
-          const ticker = result.company?.ticker || input.ticker || "";
-          const context = toolCall.arguments.context || result.summary || "";
-          onEvent({ agent: "Orchestrator", status: `Calling synthesize_knowledge(${topic}) -> CIOAgent` });
-          try {
-            const synthesized = await CIOAgent.synthesizeFromKnowledge(companyName, ticker, topic, context);
-            if (topic === "esg") result.esgSummary = synthesized;
-            else if (topic === "highlights") result.highlights = synthesized.split('\n').filter(Boolean);
-            else if (topic === "risks") result.risks = synthesized.split('\n').filter(Boolean);
-            else if (topic === "summary") result.summary = (result.summary ? result.summary + "\n\n" : "") + synthesized;
-            onEvent({ agent: "CIOAgent", status: `Knowledge synthesis complete for "${topic}"` });
-          } catch (err: any) {
-            onEvent({ agent: "CIOAgent", status: `Knowledge synthesis failed: ${err.message}` });
-          }
-          break;
-        }
+    // ── Group 1: parallel ────────────────────────────────────────────────
+    const group1Results = await Promise.allSettled(
+      group1.map(toolCall => this.executeToolCall(toolCall, result, input, onEvent))
+    );
+    for (const settled of group1Results) {
+      if (settled.status === "fulfilled") {
+        result = this.mergePartial(result, settled.value);
       }
     }
 
-    // Reflection step: detect gaps between what was requested and what was returned,
-    // then fill them using CIOAgent's LLM knowledge as a fallback.
+    // ── Group 2: sequential (needs accumulated result from group 1) ──────
+    for (const toolCall of group2) {
+      const contribution = await this.executeToolCall(toolCall, result, input, onEvent);
+      result = this.mergePartial(result, contribution);
+    }
+
+    // ── Reflection: fill any gaps with LLM knowledge ─────────────────────
     const gaps = this.detectGaps(input.options, input.userRequest || "", result);
     if (gaps.length > 0) {
-      onEvent({ agent: "Orchestrator", status: `Reflection: gaps detected [${gaps.join(', ')}] — synthesizing from LLM knowledge...` });
+      onEvent({ agent: "Orchestrator", status: `Reflection: gaps [${gaps.join(", ")}] — synthesising from LLM knowledge...` });
       await this.fillGapsWithKnowledge(gaps, result, input, onEvent);
     }
 
@@ -152,6 +105,112 @@ export class OrchestratorAgent {
       plan.push({ name: "synthesize_verdict", arguments: {} });
     }
     return plan;
+  }
+
+  /**
+   * Merges a partial result into the accumulator.
+   * Arrays (metrics, highlights, risks) are deduplicated rather than replaced.
+   */
+  private static mergePartial(
+    acc: Partial<AnalysisResult>,
+    incoming: Partial<AnalysisResult>
+  ): Partial<AnalysisResult> {
+    const merged = { ...acc, ...incoming };
+    // Deduplicate metrics by label
+    if (acc.metrics && incoming.metrics) {
+      const existingLabels = new Set(acc.metrics.map(m => m.label));
+      merged.metrics = [...acc.metrics, ...incoming.metrics.filter(m => !existingLabels.has(m.label))];
+    }
+    // Append highlights and risks rather than overwrite
+    if (acc.highlights && incoming.highlights) merged.highlights = [...acc.highlights, ...incoming.highlights];
+    if (acc.risks && incoming.risks) merged.risks = [...acc.risks, ...incoming.risks];
+    // Keep fundamental company identity when both exist
+    if (acc.company && incoming.company && !acc.company.ticker.includes('.') && !acc.company.ticker) {
+      merged.company = incoming.company;
+    }
+    return merged;
+  }
+
+  /**
+   * Executes a single tool call and returns its Partial<AnalysisResult> contribution.
+   * Also emits onEvent with the partial when the agent completes.
+   */
+  private static async executeToolCall(
+    toolCall: OrchestratorToolCall,
+    currentResult: Partial<AnalysisResult>,
+    input: { ticker?: string; file?: File; options: string[]; userRequest?: string },
+    onEvent: (event: AgentEvent) => void
+  ): Promise<Partial<AnalysisResult>> {
+    switch (toolCall.name) {
+      case "fetch_market_data": {
+        const ticker = toolCall.arguments.ticker || input.ticker;
+        if (!ticker) { onEvent({ agent: "QuantAgent", status: "Skipped: no ticker available" }); return {}; }
+        onEvent({ agent: "Orchestrator", status: "Calling fetch_market_data → QuantAgent" });
+        try {
+          const quantRes = await QuantAgent.runAutonomousAnalysis(
+            ticker, toolCall.arguments.options || input.options,
+            (s) => onEvent({ agent: "QuantAgent", status: s.replace("QuantAgent: ", "") })
+          );
+          onEvent({ agent: "QuantAgent", status: "Complete", partial: quantRes });
+          return quantRes;
+        } catch (e: any) { onEvent({ agent: "QuantAgent", status: `Failed: ${e.message}` }); return {}; }
+      }
+
+      case "analyze_document": {
+        if (!input.file) { onEvent({ agent: "FundamentalAgent", status: "Skipped: no document uploaded" }); return {}; }
+        onEvent({ agent: "Orchestrator", status: "Calling analyze_document → FundamentalAgent" });
+        try {
+          const fundamentalRes = await FundamentalAgent.runAutonomousAnalysis(
+            input.file, toolCall.arguments.options || input.options,
+            (s) => onEvent({ agent: "FundamentalAgent", status: s.replace("FundamentalAgent: ", "") })
+          );
+          onEvent({ agent: "FundamentalAgent", status: "Complete", partial: fundamentalRes });
+          return fundamentalRes;
+        } catch (e: any) { onEvent({ agent: "FundamentalAgent", status: `Failed: ${e.message}` }); return {}; }
+      }
+
+      case "compare_peers": {
+        onEvent({ agent: "Orchestrator", status: "Calling compare_peers → PeerAgent" });
+        try {
+          const ctx = toolCall.arguments.context || currentResult.summary || currentResult.company?.name || input.ticker || input.userRequest || "Financial Document";
+          const peers = await PeerAgent.identifyPeers(ctx);
+          const partial: Partial<AnalysisResult> = { competitors: peers };
+          onEvent({ agent: "PeerAgent", status: `Found ${peers.length} competitors`, partial });
+          return partial;
+        } catch (e: any) { onEvent({ agent: "PeerAgent", status: `Failed: ${e.message}` }); return {}; }
+      }
+
+      case "synthesize_verdict": {
+        onEvent({ agent: "Orchestrator", status: "Calling synthesize_verdict → CIOAgent" });
+        try {
+          const verdict = await CIOAgent.crossAnalyze(currentResult, currentResult);
+          const partial: Partial<AnalysisResult> = { crossAnalysis: verdict };
+          onEvent({ agent: "CIOAgent", status: "Verdict complete", partial });
+          return partial;
+        } catch (e: any) { onEvent({ agent: "CIOAgent", status: `Failed: ${e.message}` }); return {}; }
+      }
+
+      case "synthesize_knowledge": {
+        const topic = (toolCall.arguments.topic || "summary") as "esg" | "highlights" | "risks" | "summary";
+        const companyName = toolCall.arguments.companyName || currentResult.company?.name || input.ticker || "Unknown Company";
+        const ticker = currentResult.company?.ticker || input.ticker || "";
+        const context = toolCall.arguments.context || currentResult.summary || "";
+        onEvent({ agent: "Orchestrator", status: `Calling synthesize_knowledge(${topic}) → CIOAgent` });
+        try {
+          const synthesized = await CIOAgent.synthesizeFromKnowledge(companyName, ticker, topic, context);
+          const partial: Partial<AnalysisResult> = {};
+          if (topic === "esg") partial.esgSummary = synthesized;
+          else if (topic === "highlights") partial.highlights = synthesized.split("\n").filter(Boolean);
+          else if (topic === "risks") partial.risks = synthesized.split("\n").filter(Boolean);
+          else if (topic === "summary") partial.summary = (currentResult.summary ? currentResult.summary + "\n\n" : "") + synthesized;
+          onEvent({ agent: "CIOAgent", status: `"${topic}" synthesis complete`, partial });
+          return partial;
+        } catch (e: any) { onEvent({ agent: "CIOAgent", status: `Knowledge synthesis failed: ${e.message}` }); return {}; }
+      }
+
+      default:
+        return {};
+    }
   }
 
   /**
@@ -241,31 +300,30 @@ export class OrchestratorAgent {
     let result: Partial<AnalysisResult> = {};
 
     if (fundamentalSettled.status === "fulfilled") {
-      result = { ...result, ...fundamentalSettled.value };
-      onEvent({ agent: "FundamentalAgent", status: "Complete" });
+      const partial = fundamentalSettled.value;
+      result = this.mergePartial(result, partial);
+      onEvent({ agent: "FundamentalAgent", status: "Complete", partial });
     } else {
       onEvent({ agent: "FundamentalAgent", status: `Failed: ${(fundamentalSettled as any).reason?.message}` });
     }
 
     if (quantSettled.status === "fulfilled") {
-      const q = quantSettled.value;
-      // Supplement: keep fundamental company identity, merge metrics without duplicates
-      if (!result.company) result.company = q.company;
-      const existingLabels = new Set((result.metrics || []).map((m: any) => m.label));
-      const newMetrics = (q.metrics || []).filter((m: any) => !existingLabels.has(m.label));
-      result.metrics = [...(result.metrics || []), ...newMetrics];
-      onEvent({ agent: "QuantAgent", status: "Complete" });
+      const partial = quantSettled.value;
+      result = this.mergePartial(result, partial);
+      onEvent({ agent: "QuantAgent", status: "Complete", partial });
     } else {
       onEvent({ agent: "QuantAgent", status: `Failed: ${(quantSettled as any).reason?.message}` });
     }
 
-    // Peer comparison
+    // Peer comparison (can run after we have company context)
     if (options.includes("competitors")) {
       try {
         onEvent({ agent: "PeerAgent", status: "Identifying peers..." });
         const ctx = result.summary || result.company?.name || ticker;
-        result.competitors = await PeerAgent.identifyPeers(ctx);
-        onEvent({ agent: "PeerAgent", status: `Found ${result.competitors.length} peers` });
+        const competitors = await PeerAgent.identifyPeers(ctx);
+        const partial: Partial<AnalysisResult> = { competitors };
+        result = this.mergePartial(result, partial);
+        onEvent({ agent: "PeerAgent", status: `Found ${competitors.length} peers`, partial });
       } catch (e: any) {
         onEvent({ agent: "PeerAgent", status: `Failed: ${e.message}` });
       }
@@ -274,11 +332,13 @@ export class OrchestratorAgent {
     // CIO cross-analysis
     try {
       onEvent({ agent: "CIOAgent", status: "Running cross-analysis..." });
-      result.crossAnalysis = await CIOAgent.crossAnalyze(
+      const crossAnalysis = await CIOAgent.crossAnalyze(
         fundamentalSettled.status === "fulfilled" ? fundamentalSettled.value : {},
         quantSettled.status === "fulfilled" ? quantSettled.value : {}
       );
-      onEvent({ agent: "CIOAgent", status: "Cross-analysis complete" });
+      const partial: Partial<AnalysisResult> = { crossAnalysis };
+      result = this.mergePartial(result, partial);
+      onEvent({ agent: "CIOAgent", status: "Cross-analysis complete", partial });
     } catch (e: any) {
       onEvent({ agent: "CIOAgent", status: `Failed: ${e.message}` });
     }
