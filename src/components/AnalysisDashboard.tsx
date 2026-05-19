@@ -164,7 +164,10 @@ export default function AnalysisDashboard({ data, isLoading = false, onReset, on
     const resolveAndFetch = async () => {
       if (!company.ticker) return;
 
-      let finalTicker = company.ticker.trim();
+      // Pre-clean: strip display noise like "1810 (HKD) / 81810 (CNY)" → "1810"
+      // The Yahoo search API will then resolve to the proper symbol (e.g. "1810.HK")
+      const rawTicker = company.ticker.trim();
+      let finalTicker = rawTicker.split(/[\s\/\(（]/)[0].trim() || rawTicker;
 
       try {
         const searchRes = await fetch(`/api/search/${encodeURIComponent(finalTicker)}`);

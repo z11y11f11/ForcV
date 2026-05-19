@@ -307,7 +307,10 @@ export class OrchestratorAgent {
     }
 
     // ── Phase 2: QuantAgent + PeerAgent in parallel using extracted ticker ─
-    const extractedTicker = result.company?.ticker;
+    // Clean the raw ticker: "1810 (HKD) / 81810 (CNY)" → "1810"
+    // The dashboard search API will then resolve "1810" → "1810.HK"
+    const rawTicker = result.company?.ticker || "";
+    const extractedTicker = rawTicker.split(/[\s\/\(（]/)[0].trim() || rawTicker.trim();
 
     if (extractedTicker) {
       onEvent({ agent: "Orchestrator", status: `Ticker "${extractedTicker}" extracted from report — dispatching QuantAgent${options.includes("competitors") ? " + PeerAgent" : ""} in parallel...` });
