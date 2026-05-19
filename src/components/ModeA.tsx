@@ -54,7 +54,7 @@ export default function ModeA() {
       // runMasterAnalysis streams partials via handleEvent — we also use the
       // final return value as a safety net to fill anything that was missed.
       const final = await runMasterAnalysis(
-        { ticker: t, options: ['highlights', 'risks', 'competitors'] },
+        { ticker: t, options: ['highlights', 'risks', 'esg', 'competitors'] },
         handleEvent
       );
       setPartialData(final);

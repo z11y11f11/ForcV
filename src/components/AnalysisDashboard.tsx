@@ -558,6 +558,29 @@ export default function AnalysisDashboard({ data, isLoading = false, onReset, on
         </div>
       )}
 
+      {/* ── ESG Summary ──────────────────────────────────────────────────── */}
+      {(isLoading || data.esgSummary) && (
+        <div className="pdf-section">
+          <CollapsibleSection title="ESG Profile (Fundamental Agent)" icon={<Sprout className="w-5 h-5 text-emerald-500" />} isOpen={sections.esg} onToggle={() => toggleSection('esg')}>
+            {isLoading && !data.esgSummary ? (
+              <SkeletonSection rows={6} />
+            ) : data.esgSummary ? (
+              <div className="p-6 bg-emerald-950/10 border border-emerald-900/30 rounded-xl">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
+                  {['Environmental', 'Social', 'Governance'].map(pillar => (
+                    <div key={pillar} className="flex items-center gap-2 px-3 py-2 bg-emerald-950/30 border border-emerald-800/40 rounded-lg">
+                      <Sprout className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                      <span className="text-xs font-bold text-emerald-400 uppercase tracking-widest">{pillar}</span>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">{data.esgSummary}</p>
+              </div>
+            ) : null}
+          </CollapsibleSection>
+        </div>
+      )}
+
       {/* ── Peer Comparison ───────────────────────────────────────────────── */}
       {(isLoading || competitors.length > 0) && (
         <div className="pdf-section">
