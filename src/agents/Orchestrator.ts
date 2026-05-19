@@ -122,8 +122,14 @@ export class OrchestratorAgent {
       merged.metrics = [...acc.metrics, ...incoming.metrics.filter(m => !existingLabels.has(m.label))];
     }
     // Append highlights and risks rather than overwrite
-    if (acc.highlights && incoming.highlights) merged.highlights = [...acc.highlights, ...incoming.highlights];
-    if (acc.risks && incoming.risks) merged.risks = [...acc.risks, ...incoming.risks];
+    if (acc.highlights && incoming.highlights) {
+      const seen = new Set(acc.highlights.map(h => h.trim()));
+      merged.highlights = [...acc.highlights, ...incoming.highlights.filter(h => !seen.has(h.trim()))];
+    }
+    if (acc.risks && incoming.risks) {
+      const seen = new Set(acc.risks.map(r => r.trim()));
+      merged.risks = [...acc.risks, ...incoming.risks.filter(r => !seen.has(r.trim()))];
+    }
     // Keep fundamental company identity when both exist
     if (acc.company && incoming.company && !acc.company.ticker.includes('.') && !acc.company.ticker) {
       merged.company = incoming.company;

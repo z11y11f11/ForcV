@@ -11,8 +11,14 @@ function mergePartial(acc: Partial<AnalysisResult>, incoming: Partial<AnalysisRe
     const seen = new Set(acc.metrics.map(m => m.label));
     merged.metrics = [...acc.metrics, ...incoming.metrics.filter(m => !seen.has(m.label))];
   }
-  if (acc.highlights && incoming.highlights) merged.highlights = [...acc.highlights, ...incoming.highlights];
-  if (acc.risks && incoming.risks) merged.risks = [...acc.risks, ...incoming.risks];
+  if (acc.highlights && incoming.highlights) {
+    const seen = new Set(acc.highlights.map(h => h.trim()));
+    merged.highlights = [...acc.highlights, ...incoming.highlights.filter(h => !seen.has(h.trim()))];
+  }
+  if (acc.risks && incoming.risks) {
+    const seen = new Set(acc.risks.map(r => r.trim()));
+    merged.risks = [...acc.risks, ...incoming.risks.filter(r => !seen.has(r.trim()))];
+  }
   return merged;
 }
 

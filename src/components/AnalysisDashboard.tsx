@@ -417,27 +417,39 @@ export default function AnalysisDashboard({ data, isLoading = false, onReset, on
                 </div>
               );
             })()}
-            {/* Valuation heuristic */}
+            {/* Valuation vs analyst price target */}
             {(() => {
+              // This card compares current price to analyst consensus target price.
+              // It is NOT the same as multiple-based valuation (EV/EBITDA, PEG) shown by CIOAgent.
               let valMsg = "Fair";
+              let valSub = "vs target";
               let valColor = "text-amber-400";
               if (valSummary?.targetMeanPrice && stock?.regularMarketPrice) {
                 const diff = (valSummary.targetMeanPrice - stock.regularMarketPrice) / stock.regularMarketPrice;
-                if (diff > 0.15)  { valMsg = "Undervalued"; valColor = "text-emerald-400"; }
-                else if (diff < -0.15) { valMsg = "Overvalued"; valColor = "text-rose-400"; }
+                if (diff > 0.15)  { valMsg = "Below Target"; valColor = "text-emerald-400"; }
+                else if (diff < -0.15) { valMsg = "Above Target"; valColor = "text-rose-400"; }
+                else { valMsg = "Near Target"; }
               } else if (valSummary?.trailingPE) {
-                if (valSummary.trailingPE < 15)  { valMsg = "Undervalued"; valColor = "text-emerald-400"; }
-                else if (valSummary.trailingPE > 30) { valMsg = "Overvalued"; valColor = "text-rose-400"; }
+                valSub = "by P/E";
+                if (valSummary.trailingPE < 15)  { valMsg = "Cheap P/E"; valColor = "text-emerald-400"; }
+                else if (valSummary.trailingPE > 30) { valMsg = "Rich P/E"; valColor = "text-rose-400"; }
               }
               return (
-                <div className="bg-white/10 backdrop-blur border border-white/20 rounded-xl p-4 flex flex-col items-center justify-center min-w-[120px]">
-                  <div className="text-[10px] text-white/70 uppercase tracking-wider font-bold mb-2">Valuation</div>
+                <div className="bg-white/10 backdrop-blur border border-white/20 rounded-xl p-4 flex flex-col items-center justify-center min-w-[130px]">
+                  <div className="text-[10px] text-white/70 uppercase tracking-wider font-bold mb-1">Price vs Analysts</div>
                   {loadingSummary ? (
                     <div className="w-16 h-4 bg-white/20 rounded animate-pulse" />
                   ) : (
-                    <div className={`font-bold ${valColor}`}>
-                      {valSummary ? valMsg : '—'}
-                    </div>
+                    <>
+                      <div className={`font-bold text-sm ${valColor}`}>
+                        {valSummary ? valMsg : '—'}
+                      </div>
+                      {valSummary?.targetMeanPrice && stock?.regularMarketPrice && (
+                        <div className="text-[10px] text-white/50 mt-1">
+                          Target ${valSummary.targetMeanPrice.toFixed(2)}
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               );
