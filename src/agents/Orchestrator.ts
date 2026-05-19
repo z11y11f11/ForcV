@@ -279,63 +279,84 @@ export class OrchestratorAgent {
     return `Returned ${keys.join(", ") || "no structured fields"}`;
   }
   /**
-   * Mode B: Run FundamentalAgent + QuantAgent in parallel, then CIOAgent cross-analysis.
-   * Used when the user provides both a PDF report and a ticker symbol.
+   * Mode B: PDF-first analysis.
+   * 1. FundamentalAgent reads the report and extracts company name + ticker.
+   * 2. Ticker extracted from document → QuantAgent + PeerAgent run in parallel.
+   * 3. CIOAgent cross-analyses both outputs.
+   * No manual ticker input required — the report is the single source of truth.
    */
   static async runParallelAnalysis(
-    ticker: string,
     file: File,
     options: string[],
     onEvent: (event: AgentEvent) => void
   ): Promise<AnalysisResult> {
-    onEvent({ agent: "Orchestrator", status: "Dispatching FundamentalAgent and QuantAgent in parallel..." });
-
-    const [fundamentalSettled, quantSettled] = await Promise.allSettled([
-      FundamentalAgent.runAutonomousAnalysis(file, options,
-        (s) => onEvent({ agent: "FundamentalAgent", status: s.replace("FundamentalAgent: ", "") })),
-      QuantAgent.runAutonomousAnalysis(ticker, options,
-        (s) => onEvent({ agent: "QuantAgent", status: s.replace("QuantAgent: ", "") }))
-    ]);
-
     let result: Partial<AnalysisResult> = {};
+    let fundamentalResult: Partial<AnalysisResult> = {};
 
-    if (fundamentalSettled.status === "fulfilled") {
-      const partial = fundamentalSettled.value;
-      result = this.mergePartial(result, partial);
-      onEvent({ agent: "FundamentalAgent", status: "Complete", partial });
-    } else {
-      onEvent({ agent: "FundamentalAgent", status: `Failed: ${(fundamentalSettled as any).reason?.message}` });
-    }
-
-    if (quantSettled.status === "fulfilled") {
-      const partial = quantSettled.value;
-      result = this.mergePartial(result, partial);
-      onEvent({ agent: "QuantAgent", status: "Complete", partial });
-    } else {
-      onEvent({ agent: "QuantAgent", status: `Failed: ${(quantSettled as any).reason?.message}` });
-    }
-
-    // Peer comparison (can run after we have company context)
-    if (options.includes("competitors")) {
-      try {
-        onEvent({ agent: "PeerAgent", status: "Identifying peers..." });
-        const ctx = result.summary || result.company?.name || ticker;
-        const competitors = await PeerAgent.identifyPeers(ctx);
-        const partial: Partial<AnalysisResult> = { competitors };
-        result = this.mergePartial(result, partial);
-        onEvent({ agent: "PeerAgent", status: `Found ${competitors.length} peers`, partial });
-      } catch (e: any) {
-        onEvent({ agent: "PeerAgent", status: `Failed: ${e.message}` });
-      }
-    }
-
-    // CIO cross-analysis
+    // ── Phase 1: FundamentalAgent — read report, extract ticker ──────────
+    onEvent({ agent: "Orchestrator", status: "Reading report — extracting company info and ticker..." });
     try {
-      onEvent({ agent: "CIOAgent", status: "Running cross-analysis..." });
-      const crossAnalysis = await CIOAgent.crossAnalyze(
-        fundamentalSettled.status === "fulfilled" ? fundamentalSettled.value : {},
-        quantSettled.status === "fulfilled" ? quantSettled.value : {}
+      fundamentalResult = await FundamentalAgent.runAutonomousAnalysis(
+        file, options,
+        (s) => onEvent({ agent: "FundamentalAgent", status: s.replace("FundamentalAgent: ", "") })
       );
+      result = this.mergePartial(result, fundamentalResult);
+      onEvent({ agent: "FundamentalAgent", status: "Complete", partial: fundamentalResult });
+    } catch (e: any) {
+      onEvent({ agent: "FundamentalAgent", status: `Failed: ${e.message}` });
+    }
+
+    // ── Phase 2: QuantAgent + PeerAgent in parallel using extracted ticker ─
+    const extractedTicker = result.company?.ticker;
+
+    if (extractedTicker) {
+      onEvent({ agent: "Orchestrator", status: `Ticker "${extractedTicker}" extracted from report — dispatching QuantAgent${options.includes("competitors") ? " + PeerAgent" : ""} in parallel...` });
+
+      const parallelTasks: Promise<Partial<AnalysisResult>>[] = [
+        QuantAgent.runAutonomousAnalysis(extractedTicker, options,
+          (s) => onEvent({ agent: "QuantAgent", status: s.replace("QuantAgent: ", "") })
+        ).catch((e: any) => {
+          onEvent({ agent: "QuantAgent", status: `Failed: ${e.message}` });
+          return {} as Partial<AnalysisResult>;
+        }),
+      ];
+
+      if (options.includes("competitors")) {
+        const peerCtx = result.summary || result.company?.name || extractedTicker;
+        parallelTasks.push(
+          PeerAgent.identifyPeers(peerCtx)
+            .then(peers => {
+              const partial: Partial<AnalysisResult> = { competitors: peers };
+              onEvent({ agent: "PeerAgent", status: `Found ${peers.length} peers`, partial });
+              return partial;
+            })
+            .catch((e: any) => {
+              onEvent({ agent: "PeerAgent", status: `Failed: ${e.message}` });
+              return {} as Partial<AnalysisResult>;
+            })
+        );
+      }
+
+      const parallelResults = await Promise.allSettled(parallelTasks);
+      for (const settled of parallelResults) {
+        if (settled.status === "fulfilled") {
+          result = this.mergePartial(result, settled.value);
+        }
+      }
+
+      // Emit QuantAgent partial separately so dashboard updates immediately
+      const quantPartial = parallelResults[0].status === "fulfilled" ? parallelResults[0].value : null;
+      if (quantPartial && Object.keys(quantPartial).length > 0) {
+        onEvent({ agent: "QuantAgent", status: "Complete", partial: quantPartial });
+      }
+    } else {
+      onEvent({ agent: "Orchestrator", status: "No ticker found in document — skipping market data analysis" });
+    }
+
+    // ── Phase 3: CIOAgent cross-analysis ─────────────────────────────────
+    try {
+      onEvent({ agent: "CIOAgent", status: "Running cross-analysis between report and market data..." });
+      const crossAnalysis = await CIOAgent.crossAnalyze(fundamentalResult, result);
       const partial: Partial<AnalysisResult> = { crossAnalysis };
       result = this.mergePartial(result, partial);
       onEvent({ agent: "CIOAgent", status: "Cross-analysis complete", partial });
@@ -343,7 +364,7 @@ export class OrchestratorAgent {
       onEvent({ agent: "CIOAgent", status: `Failed: ${e.message}` });
     }
 
-    // Gap reflection
+    // ── Reflection: fill any gaps with LLM knowledge ──────────────────────
     const gaps = this.detectGaps(options, "", result);
     if (gaps.length > 0) {
       onEvent({ agent: "Orchestrator", status: `Reflection: gaps [${gaps.join(", ")}] — synthesising from LLM knowledge...` });

@@ -23,14 +23,14 @@ export async function resolveYahooTickersWithAI(query: string): Promise<string> 
   return await OrchestratorAgent.resolvePeerTicker(query);
 }
 
-// Mode B: parallel FundamentalAgent + QuantAgent, then CIOAgent cross-analysis
+// Mode B: PDF-first analysis — FundamentalAgent extracts ticker from report,
+// then QuantAgent + PeerAgent run automatically, CIOAgent cross-analyses.
 export async function runParallelAnalysis(
-  ticker: string,
   file: File,
   options: string[],
   onEvent: (event: AgentEvent) => void
 ): Promise<AnalysisResult> {
-  return await OrchestratorAgent.runParallelAnalysis(ticker, file, options, onEvent);
+  return await OrchestratorAgent.runParallelAnalysis(file, options, onEvent);
 }
 
 export type { AgentEvent };

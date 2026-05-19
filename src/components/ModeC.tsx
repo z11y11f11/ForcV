@@ -151,7 +151,8 @@ export default function ModeC() {
       let final: AnalysisResult;
 
       if (usedFile) {
-        final = await runParallelAnalysis(plan.ticker, usedFile, plan.aspects, handleEvent);
+        // PDF-first: ticker is extracted from the document automatically
+        final = await runParallelAnalysis(usedFile, plan.aspects, handleEvent);
       } else {
         final = await runMasterAnalysis(
           { ticker: plan.ticker, options: plan.aspects },
