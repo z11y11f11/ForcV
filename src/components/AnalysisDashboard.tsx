@@ -574,7 +574,7 @@ export default function AnalysisDashboard({ data, isLoading = false, onReset, on
                     </div>
                   ))}
                 </div>
-                <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">{data.esgSummary}</p>
+                <EsgText text={data.esgSummary} />
               </div>
             ) : null}
           </CollapsibleSection>
@@ -632,6 +632,35 @@ export default function AnalysisDashboard({ data, isLoading = false, onReset, on
 const VALUATION_KEYS = ['p/e', 'pe ratio', 'forward p/e', 'price-to-book', 'p/b', 'peg', 'ev/ebitda', 'price to book'];
 const PROFITABILITY_KEYS = ['margin', 'roe', 'return on equity', 'revenue growth', 'earnings growth', 'debt-to-equity', 'debt to equity', 'free cash flow', 'fcf', 'dividend'];
 // everything else (revenue, net income, market cap, eps, …) falls into "market overview"
+
+/**
+ * Renders ESG text with basic markdown support:
+ * - **bold** → <strong>
+ * - Blank-line-separated paragraphs → individual <p> blocks
+ * No external dependency needed.
+ */
+function EsgText({ text }: { text: string }) {
+  // Split into paragraphs on blank lines
+  const paragraphs = text.split(/\n\s*\n/).filter(p => p.trim());
+  return (
+    <div className="space-y-4">
+      {paragraphs.map((para, pi) => {
+        // Split paragraph into bold / normal segments
+        const parts = para.split(/(\*\*[^*]+\*\*)/g);
+        const isAiDisclaimer = para.includes('[AI Synthesis');
+        return (
+          <p key={pi} className={`text-sm leading-relaxed ${isAiDisclaimer ? 'text-slate-500 italic border-t border-slate-800 pt-3 mt-2' : 'text-slate-300'}`}>
+            {parts.map((part, i) =>
+              /^\*\*[^*]+\*\*$/.test(part)
+                ? <strong key={i} className="text-emerald-300 font-semibold">{part.replace(/\*\*/g, '')}</strong>
+                : part
+            )}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
 
 function metricSubGroup(label: string): 'valuation' | 'profitability' | 'overview' {
   const l = label.toLowerCase();
